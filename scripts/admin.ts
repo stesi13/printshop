@@ -1,6 +1,9 @@
 #!/usr/bin/env tsx
 import "dotenv/config";
+import { writeFileSync } from "node:fs";
 import { prisma } from "../lib/db";
+import { exportEtsyListingsCsv } from "../lib/etsy/listingExport";
+import { ingestEtsyOrder, type EtsyLineItem } from "../lib/etsy/ingestOrder";
 
 type ParsedArgs = {
   positional: string[];
@@ -170,6 +173,110 @@ async function productCreate(args: ParsedArgs) {
   console.log(JSON.stringify(created, null, 2));
 }
 
+async function etsyExportListings(args: ParsedArgs) {
+  const csv = await exportEtsyListingsCsv();
+  const out = args.flags.out;
+  if (out) {
+    writeFileSync(out, csv, "utf8");
+    const rowCount = csv.trim().split("\n").length - 1;
+    console.log(`Wrote ${rowCount} listings to ${out}`);
+  } else {
+    process.stdout.write(csv);
+  }
+}
+
+function parseLineItems(raw: string | undefined): EtsyLineItem[] {
+  // Format: SKU:qty:unitPriceCents,SKU2:qty:unitPriceCents
+  if (!raw) throw new Error("Missing --items (e.g. HEX-SM-SAGE:1:1800)");
+  return raw.split(",").map((entry) => {
+    const parts = entry.split(":");
+    if (parts.length !== 3) {
+      throw new Error(
+        `Invalid --items entry "${entry}". Expected SKU:qty:unitPriceCents.`,
+      );
+    }
+    const [skuCode, qtyStr, priceStr] = parts;
+    const quantity = Number(qtyStr);
+    const unitPriceCents = Number(priceStr);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new Error(`Invalid quantity for ${skuCode}: ${qtyStr}`);
+    }
+    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0) {
+      throw new Error(`Invalid unit price for ${skuCode}: ${priceStr}`);
+    }
+    return { skuCode, quantity, unitPriceCents };
+  });
+}
+
+async function etsyIngestOrder(args: ParsedArgs) {
+  const externalId = requireFlag(args, "external-id");
+  const buyerEmail = requireFlag(args, "buyer-email");
+  const buyerName = args.flags["buyer-name"];
+  const totalCents = Number(requireFlag(args, "total-cents"));
+  if (!Number.isInteger(totalCents) || totalCents < 0) {
+    throw new Error("--total-cents must be a non-negative integer");
+  }
+  const currency = args.flags.currency;
+  const placedAtRaw = requireFlag(args, "placed-at");
+  const placedAt = new Date(placedAtRaw);
+  if (Number.isNaN(placedAt.getTime())) {
+    throw new Error(`Invalid --placed-at "${placedAtRaw}" (expected ISO 8601)`);
+  }
+  const items = parseLineItems(args.flags.items);
+  const shippingAddress = args.flags["shipping-json"]
+    ? JSON.parse(args.flags["shipping-json"])
+    : undefined;
+
+  const result = await ingestEtsyOrder({
+    externalId,
+    buyerEmail,
+    buyerName: buyerName ?? undefined,
+    totalCents,
+    currency,
+    placedAt,
+    items,
+    shippingAddress,
+    notes: args.flags.notes,
+  });
+
+  if (result.status === "already_ingested") {
+    console.log(
+      `Etsy order ${result.externalId} already ingested as ${result.orderId}.`,
+    );
+  } else {
+    console.log(
+      `Ingested Etsy order ${result.externalId} as ${result.orderId}.`,
+    );
+  }
+}
+
+async function orderList(args: ParsedArgs) {
+  const source = args.flags.source as
+    | "webshop"
+    | "etsy"
+    | "ebay"
+    | undefined;
+  const orders = await prisma.order.findMany({
+    where: source ? { source } : undefined,
+    orderBy: { placedAt: "desc" },
+    include: { items: { include: { sku: true } } },
+  });
+  if (orders.length === 0) {
+    console.log("(no orders)");
+    return;
+  }
+  for (const o of orders) {
+    const total = `$${(o.totalCents / 100).toFixed(2)} ${o.currency}`;
+    console.log(
+      `${o.source}:${o.externalId}  [${o.status}]  ${total}  ${o.buyerEmail}  @ ${o.placedAt.toISOString()}`,
+    );
+    for (const item of o.items) {
+      const unit = `$${(item.unitPriceCents / 100).toFixed(2)}`;
+      console.log(`  - ${item.sku.code} x${item.quantity} @ ${unit}`);
+    }
+  }
+}
+
 const HELP = `printshop admin
 
 Usage:
@@ -181,6 +288,17 @@ Usage:
       --fulfillment made_to_order|in_stock|hybrid \\
       [--print-minutes <int>] [--material-grams <int>] [--material <name>] \\
       [--on-hand <int>] [--mto-cap <int>]
+
+  tsx scripts/admin.ts etsy:export-listings [--out <path.csv>]
+  tsx scripts/admin.ts etsy:ingest-order \\
+      --external-id <etsy-receipt-id> \\
+      --buyer-email <email> [--buyer-name <name>] \\
+      --total-cents <int> [--currency USD] \\
+      --placed-at <iso-8601> \\
+      --items SKU:qty:unitPriceCents[,SKU:qty:unitPriceCents...] \\
+      [--shipping-json '<json>'] [--notes <text>]
+
+  tsx scripts/admin.ts order:list [--source webshop|etsy|ebay]
 `;
 
 async function main() {
@@ -202,6 +320,15 @@ async function main() {
     }
     case "product:create":
       await productCreate(args);
+      break;
+    case "etsy:export-listings":
+      await etsyExportListings(args);
+      break;
+    case "etsy:ingest-order":
+      await etsyIngestOrder(args);
+      break;
+    case "order:list":
+      await orderList(args);
       break;
     case undefined:
     case "help":
