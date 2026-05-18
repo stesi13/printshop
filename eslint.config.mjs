@@ -1,8 +1,8 @@
-import { FlatCompat } from "@eslint/eslintrc";
+import next from "eslint-config-next";
 
-const compat = new FlatCompat({ baseDirectory: import.meta.dirname });
-
-export default [
-  ...compat.config({ extends: ["next/core-web-vitals", "next/typescript"] }),
+const config = [
   { ignores: [".next/**", "out/**", "node_modules/**"] },
+  ...next,
 ];
+
+export default config;
