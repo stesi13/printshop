@@ -1,0 +1,124 @@
+// Catalog & inventory model — single source of truth for what we sell and
+// how much of it we can produce. Read by the webshop and every marketplace
+// integration (Etsy, eBay, …). See docs/catalog-model.md for the domain notes.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A Product is the customer-facing concept ("Hexagonal Planter").
+// One Product has one or more Variants ("Small / Sage Green").
+// Each Variant has exactly one SKU — the unit we list, sell, and ship.
+model Product {
+  id          String          @id @default(cuid())
+  slug        String          @unique
+  title       String
+  description String
+  status      ProductStatus   @default(draft)
+  variants    ProductVariant[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+enum ProductStatus {
+  draft
+  active
+  archived
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Human-readable variant name within a product, e.g. "Small / Sage Green".
+  name      String
+  // Variant-level options as JSON so we don't pre-commit to a fixed axes list.
+  // Example: { "size": "small", "color": "sage-green" }
+  options   Json    @default("{}")
+  // Optional list price in minor units (cents). Falls back to product-level
+  // pricing later if we add it; for now every variant prices itself.
+  priceCents Int
+  currency   String @default("USD")
+
+  sku       Sku?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, name])
+}
+
+// SKU is the unit of inventory. One-to-one with Variant for now; we keep
+// them as separate tables so kits/bundles can later point multiple variants
+// at the same SKU or vice versa without a schema rewrite.
+model Sku {
+  id        String  @id @default(cuid())
+  // Short, human-readable code. Marketplace integrations key off this.
+  code      String  @unique
+  variantId String  @unique
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  // How we plan to satisfy demand for this SKU.
+  fulfillment FulfillmentMode
+
+  // --- Made-to-order economics (always populated; null only for pure resold goods we add later) ---
+  // Bench time required to print one unit. Lets us later compute lead time
+  // and printer capacity without re-modeling.
+  printTimeMinutes Int?
+  // Filament cost per unit, grams. Cheap proxy for material cost.
+  materialGrams    Int?
+  // What material we print this in. Free-form for now; promote to enum later.
+  material         String?
+
+  // --- In-stock buffer ---
+  // Already-printed units sitting on the shelf. The webshop deducts this on
+  // checkout. May be zero for pure made-to-order SKUs.
+  onHandQty        Int     @default(0)
+  // Soft cap: how many we're willing to accept on the made-to-order queue
+  // before we mark the SKU unavailable. Null = no cap.
+  madeToOrderCap   Int?
+
+  inventoryLedger InventoryEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum FulfillmentMode {
+  // Printed only after the order comes in.
+  made_to_order
+  // Buffer printed ahead; ship from shelf.
+  in_stock
+  // Both: ship from shelf if onHandQty > 0, else queue a print.
+  hybrid
+}
+
+// Append-only inventory ledger. Every change to onHandQty must be reflected
+// here so we can audit "where did this unit come from / go to". Read by the
+// admin path; written by the order pipeline (later issues).
+model InventoryEntry {
+  id        String   @id @default(cuid())
+  skuId     String
+  sku       Sku      @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  // Positive = stock added (print finished, restock).
+  // Negative = stock removed (order shipped, scrap).
+  deltaQty  Int
+  reason    InventoryReason
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([skuId, createdAt])
+}
+
+enum InventoryReason {
+  restock
+  order_reserved
+  order_shipped
+  scrap
+  manual_adjustment
+}

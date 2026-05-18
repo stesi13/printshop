@@ -7,10 +7,19 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset",
+    "admin": "tsx scripts/admin.ts"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "next": "16.2.6",
+    "prisma": "^6.19.3",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
@@ -18,8 +27,10 @@
     "@types/node": "22.10.7",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
+    "dotenv": "^17.4.2",
     "eslint": "9.18.0",
     "eslint-config-next": "16.2.6",
+    "tsx": "^4.22.2",
     "typescript": "5.7.3"
   }
 }
