@@ -9,6 +9,9 @@ The customer-facing webshop for a small 3D-printed-goods business. This repo wil
 ## Repo layout
 
 - `app/` — Next.js App Router pages.
+- `prisma/` — schema, migrations, seed for the catalog & inventory database. See [`docs/catalog-model.md`](docs/catalog-model.md).
+- `lib/db.ts` — shared Prisma client (every surface that reads catalog data imports this).
+- `scripts/admin.ts` — internal CLI for catalog ops (`npm run admin -- product:list`, etc.).
 - `next.config.mjs` — configured for static export so we can host the placeholder on GitHub Pages. The `basePath` defaults to `/printshop` in production and is overridable via `NEXT_PUBLIC_BASE_PATH`.
 - `.github/workflows/ci.yml` — lint + typecheck on every push and PR.
 - `.github/workflows/deploy.yml` — builds and publishes to GitHub Pages on push to `main`.
@@ -26,6 +29,11 @@ Other scripts:
 npm run lint
 npm run typecheck
 npm run build        # produces ./out/ for static hosting
+
+# Catalog / inventory (see docs/catalog-model.md for the local Postgres setup):
+npm run db:migrate
+npm run db:seed
+npm run admin -- product:list
 ```
 
 ## Deploy
