@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.env
+.env.local
+.env*.local
+*.log
+.DS_Store
+coverage/
+.vercel
+.idea/
+.vscode/
+next-env.d.ts.bak
