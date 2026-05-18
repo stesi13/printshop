@@ -84,6 +84,7 @@ model Sku {
   madeToOrderCap   Int?
 
   inventoryLedger InventoryEntry[]
+  orderItems      OrderItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -121,4 +122,74 @@ enum InventoryReason {
   order_shipped
   scrap
   manual_adjustment
+}
+
+// Order is the unit of demand. Every paid order — webshop or marketplace —
+// lands here. `source` records which surface produced it; `externalId` is
+// that surface's own order identifier (Stripe payment intent, Etsy receipt
+// id, eBay sale id). The pair `(source, externalId)` is unique so we can
+// safely re-run an ingest without creating duplicates.
+model Order {
+  id          String      @id @default(cuid())
+  source      OrderSource
+  // The originating surface's order id (Etsy receipt id, Stripe PI, etc).
+  externalId  String
+  status      OrderStatus @default(pending)
+
+  // Buyer + shipping. We collect the minimum needed to fulfill the order.
+  // shippingAddress is a JSON blob so each marketplace can keep its own
+  // address shape without forcing a normalized table before we have a
+  // shipping integration to consume it.
+  buyerEmail      String
+  buyerName       String?
+  shippingAddress Json    @default("{}")
+
+  // Money is recorded in minor units. We trust the source's totals on
+  // ingest; reconciliation against line items is a later concern.
+  totalCents Int
+  currency   String @default("USD")
+
+  placedAt   DateTime
+  notes      String?
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([source, externalId])
+  @@index([source, placedAt])
+}
+
+enum OrderSource {
+  webshop
+  etsy
+  ebay
+}
+
+enum OrderStatus {
+  pending
+  paid
+  printing
+  shipped
+  cancelled
+  refunded
+}
+
+// One line on an order. Always points at a SKU so the print queue and the
+// inventory ledger can both key off it. unitPriceCents snapshots the price
+// the buyer actually paid (catalog prices change; orders don't).
+model OrderItem {
+  id            String @id @default(cuid())
+  orderId       String
+  order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  skuId         String
+  sku           Sku    @relation(fields: [skuId], references: [id])
+  quantity      Int
+  unitPriceCents Int
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([skuId])
 }
